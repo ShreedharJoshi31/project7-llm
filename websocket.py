@@ -3,14 +3,16 @@ import asyncio
 import websockets
 import aiohttp
 import json
+import os
 from langchain_community.vectorstores import Chroma
 from langchain.prompts import ChatPromptTemplate
 from get_embedding_function import get_embedding_function
+from groq import Groq
 
 CHROMA_PATH = "chroma"
 
 PROMPT_TEMPLATE = """
-Answer the question based only on the following context:
+Answer the question using the following context if necessary:
 
 {context}
 
@@ -19,26 +21,27 @@ Answer the question based only on the following context:
 Answer the question based on the above context: {question}
 """
 
-async def fetch_streamed_response(prompt: str, session: aiohttp.ClientSession):
-    url = "https://fast-api.snova.ai/v1/chat/completions"
-    headers = {
-        "Authorization": "Bearer c2hyZWVkaGFyam9zaGkwM0BnbWFpbC5jb206bnVxY1J6NHl4aTRZUU5feA==",
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "messages": [
-            {"role": "system", "content": "Answer the question in detail."},
-            {"role": "user", "content": prompt}
-        ],
-        "stop": ["[INST", "[INST]", "[/INST]", "[/INST]"],
-        "model": "Meta-Llama-3.1-8B-Instruct",
-        "stream": True,
-        "stream_options": {"include_usage": True}
-    }
+# Create Groq client
+client = Groq(api_key="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")
 
-    async with session.post(url, json=payload, headers=headers) as response:
-        async for line in response.content:
-            yield line
+# Function to stream response from Groq API and send it via WebSocket
+async def stream_groq_response(prompt: str, websocket):
+    # Stream response from Groq
+    stream = client.chat.completions.create(
+        messages=[
+            {"role": "system", "content": "You are a helpful assistant give the outputs in markdown."},
+            {"role": "user", "content": prompt},
+        ],
+        model="llama3-8b-8192",
+        stream=True,
+    )
+
+    # Stream each chunk of the response to the WebSocket
+    for chunk in stream:
+        # delta_content = chunk.choices[0].delta.get("content", "")
+        # print(delta_content)
+        # if delta_content:
+        await websocket.send(json.dumps({"response": chunk.choices[0].delta.content}))
 
 async def query_rag(query_text: str):
     # Prepare the DB.
@@ -55,37 +58,28 @@ async def query_rag(query_text: str):
     return prompt, results
 
 async def websocket_handler(websocket, path):
-    async with aiohttp.ClientSession() as session:
-        async for message in websocket:
-            # Expecting the message to be a JSON object with a "query" key
-            try:
-                data = json.loads(message)
-                query_text = data.get("query", "").strip()
+    async for message in websocket:
+        # Expecting the message to be a JSON object with a "query" key
+        try:
+            data = json.loads(message)
+            query_text = data.get("query", "").strip()
 
-                if not query_text:
-                    await websocket.send(json.dumps({"error": "No query provided"}))
-                    continue
+            if not query_text:
+                await websocket.send(json.dumps({"error": "No query provided"}))
+                continue
 
-                prompt, results = await query_rag(query_text)
+            prompt, results = await query_rag(query_text)
 
-                async for response in fetch_streamed_response(prompt, session):
-                    await websocket.send(response.decode('utf-8'))
+            # Stream response from Groq and send it via WebSocket
+            await stream_groq_response(prompt, websocket)
 
-                print("HO GAYA")
-
-            except json.JSONDecodeError:
-                await websocket.send(json.dumps({"error": "Invalid JSON format"}))
-                print("Nahi hua")
+        except json.JSONDecodeError:
+            await websocket.send(json.dumps({"error": "Invalid JSON format"}))
 
 async def main():
     async with websockets.serve(websocket_handler, "localhost", 8765):
         await asyncio.Future()  # Run forever
 
 if __name__ == "__main__":
-    # Create CLI if needed for other purposes
-    # parser = argparse.ArgumentParser()
-    # parser.add_argument("query_text", type=str, help="The query text.")
-    # args = parser.parse_args()
-
     # Start WebSocket server
     asyncio.run(main())
