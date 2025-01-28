@@ -3,10 +3,14 @@
 import json
 import os
 from groq import Groq
+import httpx
 
 from app.utils.prompts import SYSTEM_PROMPT
 
-client = Groq(api_key="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")
+http_client = httpx.Client()
+
+client = Groq(api_key="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", http_client=http_client
+)
 
 async def stream_groq_response(prompt: str, websocket):
     # Stream response from Groq
@@ -15,7 +19,7 @@ async def stream_groq_response(prompt: str, websocket):
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": prompt},
         ],
-        model="llama3-8b-8192",
+        model="llama-3.3-70b-versatile",
         stream=True,
     )
 

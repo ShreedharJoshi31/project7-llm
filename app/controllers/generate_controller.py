@@ -1,5 +1,3 @@
-# app/controllers/websocket_controller.py
-
 import json
 from fastapi import WebSocket
 from app.utils.rag_utils import query_rag
